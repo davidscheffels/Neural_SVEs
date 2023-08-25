@@ -3,20 +3,20 @@ hidden_channels: 12  # dimension of the hidden layers (hence of the hidden Volte
 hidden_states_kernels: 24 # choose number of hidden states for the kernels
 
 # Training hyperparameters.
-epochs: 10  # Number of epochs
+epochs: 1000  # Number of epochs
 batch_size: 50 # Batch Size
 learning_rate: 0.01  # Learning rate
 scheduler_gamma: 0.8  # After epochs/4 steps, the learning rate is multiplicatively reduced by scheduler_gamma 
 p: 2            # Use the Lp-loss as the loss function 
 
 # Simulational parameters
-n: 50     # Number of training simulations
-dim: 2     # Dimension of the process
-T: 10       # End time point
+n: 500     # Number of training simulations
+dim: 1     # Dimension of the process
+T: 5       # End time point
 dt: 0.1   # Grid size
 
 # Evaluation parameters
-print_every: 1   # Print results every print_every steps
+print_every: 5   # Print results every print_every steps
 
 
 # Which Volterra process do you want to learn?

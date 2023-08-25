@@ -17,32 +17,12 @@ import matplotlib.pyplot as plt
 def read_yaml(file_path):           # To read the configurations file
     with open(file_path, "r") as f:
         return yaml.safe_load(f)
-    
-is_cuda = torch.cuda.is_available()     # check if gpu is availaböe
-device = 'cuda' if is_cuda else 'cpu'
-if not is_cuda:
-    print("Warning: CUDA not available; falling back to CPU but this is likely to be very slow.")
 
 def count_params(model):
     c = 0
     for p in list(model.parameters()):
         c += reduce(operator.mul, list(p.size()))
     return c
-
-#-------Loading the parameters-----------------------------------------
-params = read_yaml("configurations.yaml") # Load the parameters
-hidden_channels, hidden_states_kernels, epochs, batch_size, learning_rate, scheduler_gamma, p, n, dim, T, dt, print_every, sve_type, epsilon, theta_o, mu, sigma, alpha, kappa, theta, xi, x0 = params.values()
-ntrain=int(n*0.8)   # Derived parameters
-ntest=int(n*0.2)
-scheduler_step=int(epochs/4)+1     # after every 25% of Epochs, we want to decrease the step size by scheduler_gamma multiplicatively
-#---------Foldername-----------------------------------
-absolute_path = os.getcwd() 
-foldername = os.path.join(absolute_path, "nSVE_{}_T{}_dt{}_hidden{}_epochs{}_n{}".format(sve_type,T, dt, hidden_channels, epochs, n))  # where to store the plots
-if not os.path.isdir(foldername): os.makedirs(foldername)
-else:   # if foldername already exists, we additionally take thetime to the foldername to avoid duplicates
-    now = str(datetime.now()).replace(" ", "-").replace(":",".") 
-    foldername = os.path.join(absolute_path, "nSVE_{}_T{}_dt{}_hidden{}_epochs{}_n{}_time{}".format(sve_type,T, dt, hidden_channels, epochs, n, now))
-    os.makedirs(foldername)
 
 #-----------Solving a SVE----------------------------
 class SVE():
@@ -67,7 +47,7 @@ class SVE():
             Solution[i+1,:,:] = X_0*self.g((i+1)*dt) + int_val + self.K_mu(0,(i+1)*dt) * self.mu(0,X_0)*dt + self.K_sigma(0,(i+1)*dt) * self.sigma(0,X_0) * B[1,:,:]
         return Solution
     
-#-----Data generating-------------------------------
+#-----Noise generating-------------------------------
 class Noise(object):    
     def partition(self, a,b, dx): #makes a partition of [a,b] of equal sizes dx
         return np.linspace(a, b, int((b - a) / dx) + 1)
@@ -80,6 +60,27 @@ class Noise(object):
         BM = np.cumsum(BM, axis  = 0) # cumulative sum: B_n = \sum_1^n N(0, \sqrt(dt))
         return BM
 
+#-------Loading the parameters-----------------------------------------
+is_cuda = torch.cuda.is_available()     # check if gpu is availaböe
+device = 'cuda' if is_cuda else 'cpu'
+if not is_cuda:
+    print("Warning: CUDA not available; falling back to CPU but this is likely to be very slow.")
+
+params = read_yaml("configurations.yaml") # Load the parameters
+hidden_channels, hidden_states_kernels, epochs, batch_size, learning_rate, scheduler_gamma, p, n, dim, T, dt, print_every, sve_type, epsilon, theta_o, mu, sigma, alpha, kappa, theta, xi, x0 = params.values()
+ntrain=int(n*0.8)   # Derived parameters
+ntest=int(n*0.2)
+scheduler_step=int(epochs/4)+1     # after every 25% of Epochs, we want to decrease the step size by scheduler_gamma multiplicatively
+#---------Foldername-----------------------------------
+absolute_path = os.getcwd() 
+foldername = os.path.join(absolute_path, "nSVE_{}_T{}_dt{}_hidden{}_epochs{}_n{}".format(sve_type,T, dt, hidden_channels, epochs, n))  # where to store the plots
+if not os.path.isdir(foldername): os.makedirs(foldername)
+else:   # if foldername already exists, we additionally take thetime to the foldername to avoid duplicates
+    now = str(datetime.now()).replace(" ", "-").replace(":",".") 
+    foldername = os.path.join(absolute_path, "nSVE_{}_T{}_dt{}_hidden{}_epochs{}_n{}_time{}".format(sve_type,T, dt, hidden_channels, epochs, n, now))
+    os.makedirs(foldername)
+
+#--------Data Creating--------------------------------------
 X_0 = np.random.normal(x0,x0/10,[n, dim])  # Initial value
 B = Noise().BM(0, T, dt, n, dim)     # Brownian motion realizations
 

@@ -7,13 +7,13 @@ mul_trunk: False   # Boolean if depth of the last hidden layer in trunk should b
 activation: "relu"   # activation function
 
 # Training hyperparameters.
-epochs: 100  # Number of epochs
-batch_size: 20 # Batch Size
+epochs: 50000  # Number of epochs
+batch_size: 50 # Batch Size
 learning_rate: 0.001  # Learning rate
 scheduler_gamma: 0.8  # After epochs/4 steps, the learning rate is multiplicatively reduced by scheduler_gamma 
 
 # Simulational parameters
-n: 100     # Number of training simulations
+n: 500     # Number of training simulations
 dim: 1     # Dimension of the process
 T: 5       # End time point
 dt: 0.1   # Grid size
@@ -37,4 +37,4 @@ kappa: 1
 theta: 2
 xi: 0.5
 
-x0: 2
+x0: 5

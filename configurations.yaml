@@ -1,0 +1,38 @@
+# Architectural hyperparameters
+hidden_channels: 12  # dimension of the hidden layers (hence of the hidden Volterra equation to be solved)
+hidden_states_kernels: 24 # choose number of hidden states for the kernels
+
+# Training hyperparameters.
+epochs: 10  # Number of epochs
+batch_size: 50 # Batch Size
+learning_rate: 0.01  # Learning rate
+scheduler_gamma: 0.8  # After epochs/4 steps, the learning rate is multiplicatively reduced by scheduler_gamma 
+p: 2            # Use the Lp-loss as the loss function 
+
+# Simulational parameters
+n: 50     # Number of training simulations
+dim: 2     # Dimension of the process
+T: 10       # End time point
+dt: 0.1   # Grid size
+
+# Evaluation parameters
+print_every: 1   # Print results every print_every steps
+
+
+# Which Volterra process do you want to learn?
+sve_type: "RH"          # Choose from: PEN, OU, RH, JUMP (JUMP uses mean-reverting parameter thea from RH)
+# Dependent on which sve_type you choose, choose the following parameters:
+# PEN: 
+epsilon: 1            # Amount of perturbation
+# OU:
+theta_o: 1              # Process parameters
+mu: 1
+sigma: 1
+# RH:
+alpha: 0.4              # Process parameters
+kappa: 1
+theta: 2
+xi: 0.5
+
+# Expectation of the initial value (it will be N(x0,x0/10)-distributed)
+x0: 5

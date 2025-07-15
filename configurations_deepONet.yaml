@@ -2,18 +2,18 @@
 width: 2048   # width of both branch and trunk net
 depth_branch: 2  # depth of branch
 depth_trunk: 2   # depth of trunk
-mul_branch: True   # Boolean if depth of the last hidden layer in branch should be doubled
-mul_trunk: False   # Boolean if depth of the last hidden layer in trunk should be doubled
+mul_branch: True   # Boolean if depth last hidden layer in branch should be doubled
+mul_trunk: False   # Boolean if depth last hidden layer in trunk should be doubled
 activation: "relu"   # activation function
 
 # Training hyperparameters.
-epochs: 50000  # Number of epochs
-batch_size: 50 # Batch Size
+epochs: 1000000  # Number of epochs
+batch_size: 20 # Batch Size
 learning_rate: 0.001  # Learning rate
 scheduler_gamma: 0.8  # After epochs/4 steps, the learning rate is multiplicatively reduced by scheduler_gamma 
 
 # Simulational parameters
-n: 500     # Number of training simulations
+n: 2000     # Number of training simulations
 dim: 1     # Dimension of the process
 T: 5       # End time point
 dt: 0.1   # Grid size
@@ -23,10 +23,10 @@ print_every: 100   # Print results every print_every steps
 
 
 # Which Volterra process do you want to learn?
-sve_type: "RH"          # Choose from: PEN, OU, RH
+sve_type: "NPEN"          # Choose from: PEN, NPEN, OU, RH
 # Dependent on which sve_type you choose, choose the following parameters:
 # PEN: 
-epsilon: 1.0            # Amount of perturbation
+epsilon: 0.4            # Amount of perturbation
 # OU:
 theta_o: 1              # Process parameters
 mu: 1
@@ -37,4 +37,4 @@ kappa: 1
 theta: 2
 xi: 0.5
 
-x0: 5
+x0: 2

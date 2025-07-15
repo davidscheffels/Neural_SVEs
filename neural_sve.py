@@ -4,14 +4,22 @@ import numpy as np
 import math
 import os
 import operator
+import time
+import psutil
 from functools import reduce
 from timeit import default_timer
-import yaml
+import yamla
 import warnings
 warnings.simplefilter("ignore", UserWarning)
 from datetime import datetime
 import tqdm
 import matplotlib.pyplot as plt
+
+# Do you want to use CUDA?
+CUDA = False  # Set to False if you want to use CPU
+
+# Do you want to use a pre-trained model?
+Use_pretrained_if_avail = False
 
 #---------------------------------------------------------------------
 def read_yaml(file_path):           # To read the configurations file
@@ -36,7 +44,7 @@ class SVE():
     def solver_(self, B, X_0, T, dt):       # solve an SVE using Euler-Maruyama-scheme
         if T/dt > int(T/dt): raise ValueError("dt is not of the form 1/m")
         Solution = np.zeros(shape = B.shape)
-        X_0 = torch.from_numpy(X_0)
+        #X_0 = torch.from_numpy(X_0)
         Solution[0, :, :] = X_0*self.g(0) 
         
         # Euler-Maruyama-method for SVEs, see [Zhang2008]:
@@ -47,7 +55,6 @@ class SVE():
             Solution[i+1,:,:] = X_0*self.g((i+1)*dt) + int_val + self.K_mu(0,(i+1)*dt) * self.mu(0,X_0)*dt + self.K_sigma(0,(i+1)*dt) * self.sigma(0,X_0) * B[1,:,:]
         return Solution
     
-#-----Noise generating-------------------------------
 class Noise(object):    
     def partition(self, a,b, dx): #makes a partition of [a,b] of equal sizes dx
         return np.linspace(a, b, int((b - a) / dx) + 1)
@@ -59,62 +66,6 @@ class Noise(object):
         BM[0] = 0 #set the initial value to 0
         BM = np.cumsum(BM, axis  = 0) # cumulative sum: B_n = \sum_1^n N(0, \sqrt(dt))
         return BM
-
-#-------Loading the parameters-----------------------------------------
-is_cuda = torch.cuda.is_available()     # check if gpu is availaböe
-device = 'cuda' if is_cuda else 'cpu'
-if not is_cuda:
-    print("Warning: CUDA not available; falling back to CPU but this is likely to be very slow.")
-
-params = read_yaml("configurations.yaml") # Load the parameters
-hidden_channels, hidden_states_kernels, epochs, batch_size, learning_rate, scheduler_gamma, p, n, dim, T, dt, print_every, sve_type, epsilon, theta_o, mu, sigma, alpha, kappa, theta, xi, x0 = params.values()
-ntrain=int(n*0.8)   # Derived parameters
-ntest=int(n*0.2)
-scheduler_step=int(epochs/4)+1     # after every 25% of Epochs, we want to decrease the step size by scheduler_gamma multiplicatively
-#---------Foldername-----------------------------------
-absolute_path = os.getcwd() 
-foldername = os.path.join(absolute_path, "nSVE_{}_T{}_dt{}_hidden{}_epochs{}_n{}".format(sve_type,T, dt, hidden_channels, epochs, n))  # where to store the plots
-if not os.path.isdir(foldername): os.makedirs(foldername)
-else:   # if foldername already exists, we additionally take thetime to the foldername to avoid duplicates
-    now = str(datetime.now()).replace(" ", "-").replace(":",".") 
-    foldername = os.path.join(absolute_path, "nSVE_{}_T{}_dt{}_hidden{}_epochs{}_n{}_time{}".format(sve_type,T, dt, hidden_channels, epochs, n, now))
-    os.makedirs(foldername)
-
-#--------Data Creating--------------------------------------
-X_0 = np.random.normal(x0,x0/10,[n, dim])  # Initial value
-B = Noise().BM(0, T, dt, n, dim)     # Brownian motion realizations
-
-# Generate SVE parameters dependent on sve_type
-if sve_type == "PEN":   # Pendulum equation
-    g = lambda t: 1
-    K_mu = lambda s, t: s-t
-    K_sigma = lambda s, t: epsilon*(s-t)
-    mu = lambda s, x: x
-    sigma = lambda s,x: x
-elif sve_type == "OU":   # Ornstein-Uhlenbeck     
-    g = lambda t: np.exp(-theta_o*t)
-    K_mu = lambda s, t: np.exp(-theta_o*(t-s))
-    K_sigma = lambda s, t: np.exp(-theta_o*(t-s))
-    mu = lambda s, x: x
-    sigma = lambda s,x: np.sqrt(np.abs(x))
-elif sve_type == "RH":   # Rough-Heston
-    g = lambda t: 1
-    K_mu = lambda s, t: np.power((t-s), -alpha)
-    K_sigma = lambda s, t: np.power((t-s), -alpha)
-    mu = lambda s, x: kappa*(theta-x)/math.gamma(1-alpha)
-    sigma = lambda s,x: xi * np.sqrt(np.abs(x))/math.gamma(1-alpha)
-elif sve_type == "JUMP":   # SVE with kernels K(t-s)=1 if t-s<=T/4 and K(t-s)=-1 else
-    g = lambda t: 1
-    K_mu = lambda s, t: -1+2*np.sign(T/4-(t-s))
-    K_sigma = lambda s, t: -1+2*np.sign(T/4-(t-s))
-    mu = lambda s, x: theta-x
-    sigma = lambda s,x: np.sqrt(np.abs(x))
-
-Sol = SVE(g, K_mu, K_sigma, mu, sigma).solver_(B, X_0, T, dt)   
-#---------------------------------------------------
-
-B_t = torch.from_numpy(B.astype(np.float32)).to(device)  # tensors in pytorch
-data = torch.from_numpy(Sol.astype(np.float32)).to(device)
 
 def dataloader_SVE(data, B, ntrain, ntest, batch_size):
     X_0_train = data[0,:ntrain,:].unsqueeze(0).transpose(0,1) # switch dimensions to get same in the first one. Now: (n, t, dim)
@@ -129,8 +80,6 @@ def dataloader_SVE(data, B, ntrain, ntest, batch_size):
     test_loader = torch.utils.data.DataLoader(torch.utils.data.TensorDataset(X_0_test, B_test, X_test), batch_size=batch_size, shuffle=False)
 
     return train_loader, test_loader
-
-train_loader, test_loader = dataloader_SVE(data, B_t, ntrain=ntrain, ntest=ntest, batch_size=batch_size)
 
 class solver_neuralSVE(nn.Module):
     def __init__(self, g, K_mu, K_sigma, mu, sigma):
@@ -208,20 +157,6 @@ class NeuralSVE(torch.nn.Module):
         x = self.readout(z)
         return x
 
-
-model = NeuralSVE(dim, noise_channels=dim, hidden_channels=hidden_channels, hidden_states_kernels=hidden_states_kernels, batch_size=batch_size, T=T, dt=dt).to(device)
-absolute_path = os.getcwd()
-if not os.path.isdir(os.path.join(absolute_path,"Models")): os.makedirs(os.path.join(absolute_path,"Models"))  # to load/store the model
-relative_path2 = os.path.join("Models", "{}_hidden{}_hsk{}.pth".format(sve_type,hidden_channels,hidden_states_kernels))
-full_path2 = os.path.join(absolute_path, relative_path2)
-try: 
-    model.load_state_dict(torch.load(full_path2))
-    print("Model loaded.")
-except:
-    print("No model found yet.")
-print('The model has {} parameters'. format(count_params(model)))
-model = model.float()
-
 class LpLoss(object):
     def __init__(self, dim=1, p=2):
         super(LpLoss, self).__init__()
@@ -231,10 +166,7 @@ class LpLoss(object):
         diff_norms = torch.norm(x - y.transpose(0,1), self.p, 0)
         y_norms = torch.norm(y.transpose(0,1), self.p, 0)
         return torch.sum(diff_norms/y_norms)
-    
-loss =LpLoss(p=p)  
 
-# Start the training
 def train_nsve(model, train_loader, test_loader, myloss, epochs=5000, learning_rate=0.001, scheduler_step=100, scheduler_gamma=0.5, print_every=20):
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=scheduler_step, gamma=scheduler_gamma) # alternativen zur adaptiven Stepsize Steuerung möglich
@@ -251,6 +183,10 @@ def train_nsve(model, train_loader, test_loader, myloss, epochs=5000, learning_r
     output_model_train = []
     output_test = []
     output_model_test = []
+
+    # Memory tracking
+    memory_usage = {"train": [], "test": []}
+
     try:
         trange = tqdm.tqdm(range(epochs))
         for ep in trange:
@@ -273,6 +209,16 @@ def train_nsve(model, train_loader, test_loader, myloss, epochs=5000, learning_r
 
                 times_train.append(default_timer()-t1)
 
+            # Track GPU memory usage (if CUDA is available)
+            if torch.cuda.is_available():
+                train_memory = torch.cuda.memory_allocated() / (1024 ** 2)  # Convert to MB
+                memory_usage["train"].append(train_memory)
+
+            # Track CPU memory usage
+            process = psutil.Process()
+            cpu_memory = process.memory_info().rss / (1024 ** 2)  # Convert to MB
+            memory_usage["train"].append(cpu_memory)
+
             # testing on test set
             test_loss = 0.
             with torch.no_grad(): # no gradient calculations on test set
@@ -286,29 +232,152 @@ def train_nsve(model, train_loader, test_loader, myloss, epochs=5000, learning_r
                     loss = myloss.rel(x_pred, X_)
                     test_loss += loss.item()
                     times_eval.append(default_timer()-t1)
+
+            # Track GPU memory usage during testing
+            if torch.cuda.is_available():
+                test_memory = torch.cuda.memory_allocated() / (1024 ** 2)  # Convert to MB
+                memory_usage["test"].append(test_memory)
+
+            # Track CPU memory usage during testing
+            cpu_memory = process.memory_info().rss / (1024 ** 2)  # Convert to MB
+            memory_usage["test"].append(cpu_memory)
+
+
             scheduler.step()
 
             if ep % print_every == 0:
                 losses_train.append(train_loss/ntrain)
                 losses_test.append(test_loss/ntest)
                 trange.write("Epoch {:04d} | Total Train Loss {:.6f} | Total Test Loss {:.6f}".format(ep, train_loss / ntrain, test_loss / ntest))
-        return model, losses_train, losses_test, output_train, output_model_train, output_test, output_model_test
+        return model, losses_train, losses_test, output_train, output_model_train, output_test, output_model_test, memory_usage, times_train
 
     except KeyboardInterrupt:
-        return model, losses_train, losses_test, output_train, output_model_train, output_test, output_model_test
+        return model, losses_train, losses_test, output_train, output_model_train, output_test, output_model_test, memory_usage, times_train
+
+#---------------------------------------------------------------------
+#-------Loading the parameters-----------------------------------------
+is_cuda = torch.cuda.is_available()     # check if gpu is available
+device = 'cuda' if is_cuda & CUDA == True else 'cpu'
+if device == 'cpu':
+    print("Warning: CUDA not available; falling back to CPU.")
+elif device == 'cuda':
+    print("Using CUDA for training.")
+
+params = read_yaml("configurations.yaml") # Load the parameters
+hidden_channels, hidden_states_kernels, epochs, batch_size, learning_rate, scheduler_gamma, rel_sched_step, p, n, dim, T, dt, print_every, sve_type, epsilon, theta_o, mu, sigma, alpha, kappa, theta, xi, vola, x0 = params.values()
+ntrain=int(n*0.8)   # Derived parameters
+ntest=int(n*0.2)
+scheduler_step=int(epochs/rel_sched_step)+1     # after every 1/rel_sched_step of Epochs, we decrease the step size by scheduler_gamma multiplicatively
+#---------Foldername-----------------------------------
+absolute_path = os.getcwd() 
+foldername = os.path.join(absolute_path, "nSVE_{}_T{}_dt{}_hidden{}_epochs{}_n{}".format(sve_type,T, dt, hidden_channels, epochs, n))  # where to store the plots
+if not os.path.isdir(foldername): os.makedirs(foldername)
+else:   # if foldername already exists, we additionally take the time to the foldername to avoid duplicates
+    now = str(datetime.now()).replace(" ", "-").replace(":",".") 
+    foldername = os.path.join(absolute_path, "nSVE_{}_T{}_dt{}_hidden{}_epochs{}_n{}_time{}".format(sve_type,T, dt, hidden_channels, epochs, n, now))
+    os.makedirs(foldername)
+
+#--------Data Creating--------------------------------------
+X_0 = np.random.normal(x0,x0/10,[n, dim])  # Initial value
+B = Noise().BM(0, T, dt, n, dim)     # Brownian motion realizations
+
+# Generate SVE parameters dependent on sve_type
+if sve_type == "PEN":   # Pendulum equation
+    g = lambda t: 1
+    K_mu = lambda s, t: s-t
+    K_sigma = lambda s, t: epsilon*(s-t)
+    mu = lambda s, x: x
+    sigma = lambda s,x: x
+elif sve_type == "NPEN":   # Nonlinear Pendulum equation
+    g = lambda t: 1
+    K_mu = lambda s, t: t-s
+    K_sigma = lambda s, t: epsilon*(t-s)
+    mu = lambda s, x: -np.sin(x)
+    sigma = lambda s,x: x
+elif sve_type == "OU":   # Ornstein-Uhlenbeck     
+    g = lambda t: np.exp(-theta_o*t)
+    K_mu = lambda s, t: np.exp(-theta_o*(t-s))
+    K_sigma = lambda s, t: np.exp(-theta_o*(t-s))
+    mu = lambda s, x: x
+    sigma = lambda s,x: np.sqrt(np.abs(x))
+elif sve_type == "RH":   # Rough-Heston
+    g = lambda t: 1
+    K_mu = lambda s, t: np.power((t-s), -alpha)
+    K_sigma = lambda s, t: np.power((t-s), -alpha)
+    mu = lambda s, x: kappa*(theta-x)/math.gamma(1-alpha)
+    sigma = lambda s,x: xi * np.sqrt(np.abs(x))/math.gamma(1-alpha)
+elif sve_type == "JUMP":   # SVE with kernels K(t-s)=1 if t-s<=T/4 and K(t-s)=-1 else
+    g = lambda t: 1
+    K_mu = lambda s, t: -1+2*np.sign(T/4-(t-s))
+    K_sigma = lambda s, t: -1+2*np.sign(T/4-(t-s))
+    mu = lambda s, x: theta-x
+    sigma = lambda s,x: np.sqrt(np.abs(x))
+elif sve_type == "BR": #Bank Run modelling
+    g = lambda t: 1
+    K_mu = lambda s, t: 1.0 - np.where(s < t-10, 1.0, 0.0)
+    K_sigma = lambda s, t: 1
+    mu = lambda s, x: (0.1 + 0.5 * np.sin((s*np.pi)/(2*T))) * np.matmul(x, (np.full((dim, dim), 1.0 / dim)-np.eye(dim)))  # p is the number of banks
+    sigma = lambda s,x: vola
+
+Sol = SVE(g, K_mu, K_sigma, mu, sigma).solver_(B, X_0, T, dt)   
+#---------------------------------------------------
+
+B_t = torch.from_numpy(B.astype(np.float32)).to(device)  # tensors in pytorch
+data = torch.from_numpy(Sol.astype(np.float32)).to(device)
+
+train_loader, test_loader = dataloader_SVE(data, B_t, ntrain=ntrain, ntest=ntest, batch_size=batch_size)
+
+model = NeuralSVE(dim, noise_channels=dim, hidden_channels=hidden_channels, hidden_states_kernels=hidden_states_kernels, batch_size=batch_size, T=T, dt=dt).to(device)
+absolute_path = os.getcwd()
+if not os.path.isdir(os.path.join(absolute_path,"Models")): os.makedirs(os.path.join(absolute_path,"Models"))  # to load/store the model
+relative_path2 = os.path.join("Models", "{}_hidden{}_hsk{}.pth".format(sve_type,hidden_channels,hidden_states_kernels))
+full_path2 = os.path.join(absolute_path, relative_path2)
+if Use_pretrained_if_avail:
+    try: 
+        model.load_state_dict(torch.load(full_path2))
+        print("Model loaded.")
+        Model_loaded = "Yes"
+    except:
+        print("No model found yet.")
+        Model_loaded = "No"
+else:
+    print("No pre-trained model will be used.")
+    Model_loaded = "No"
+
+print('The model has {} parameters'. format(count_params(model)))
+model = model.float()
+
+loss =LpLoss(p=p)  
+
+# Start the training
     
+start_time = time.time()  # Record the start time
+model, losses_train, losses_test, output_train, output_model_train, output_test, output_model_test, memory_usage, times_train = train_nsve(model, train_loader, test_loader, loss, epochs=epochs, learning_rate=learning_rate, scheduler_step=scheduler_step, scheduler_gamma=scheduler_gamma, print_every=print_every)   # epochs bei n=1200 war 5000
+end_time = time.time()  # Record the end time
+run_time = end_time - start_time  # Calculate the total training time
+total_training_time = sum(times_train)
 
-model, losses_train, losses_test, output_train, output_model_train, output_test, output_model_test = train_nsve(model, train_loader, test_loader, loss, epochs=epochs, learning_rate=learning_rate, scheduler_step=scheduler_step, scheduler_gamma=scheduler_gamma, print_every=print_every)   # epochs bei n=1200 war 5000
-
+# Save the model
 torch.save(model.state_dict(), full_path2)
 
-# Filenamesfor the plots:
+# Filenames for the plots:
 relative_path3_l = os.path.join(foldername, "{}_T{}_dt{}_hidden{}_hsk{}_loss.png".format(sve_type, T,dt,hidden_channels, hidden_states_kernels))
 full_path3_l = os.path.join(absolute_path, relative_path3_l)
 relative_path3_p1 = os.path.join(foldername, "{}_T{}_dt{}_hidden{}_hsk{}_pathstrain.png".format(sve_type, T,dt,hidden_channels, hidden_states_kernels))
 full_path3_p1 = os.path.join(absolute_path, relative_path3_p1)
 relative_path3_p2 = os.path.join(foldername, "{}_T{}_dt{}_hidden{}_hsk{}_pathstest.png".format(sve_type, T,dt,hidden_channels, hidden_states_kernels))
 full_path3_p2 = os.path.join(absolute_path, relative_path3_p2)
+# Extra for BR:
+if sve_type == "BR":
+    relative_path3_p3 = os.path.join(foldername, "{}_T{}_dt{}_hidden{}_hsk{}_pathstrainBR.png".format(sve_type, T,dt,hidden_channels, hidden_states_kernels))
+    full_path3_p3 = os.path.join(absolute_path, relative_path3_p3)
+    relative_path3_p4 = os.path.join(foldername, "{}_T{}_dt{}_hidden{}_hsk{}_pathstestBR.png".format(sve_type, T,dt,hidden_channels, hidden_states_kernels))
+    full_path3_p4 = os.path.join(absolute_path, relative_path3_p4)
+
+
+relative_path_model = os.path.join(foldername, "model.pth")
+full_path_model = os.path.join(absolute_path, relative_path_model)
+torch.save(model.state_dict(), full_path_model)
 
 if n<50: print("Only generating plots for n>=50.")
 if dim==1 and n>=50:
@@ -349,6 +418,14 @@ if dim==1 and n>=50:
     plt.clf()
 
 if dim==2 and n>=50:
+    plt.plot(np.arange(1,len(losses_train)*print_every+1, print_every), losses_train, label='train')
+    plt.plot(np.arange(1,len(losses_test)*print_every+1, print_every), losses_test, label='test')
+    plt.xlabel('Epoch')
+    plt.ylabel('Relative L2 loss')
+    plt.legend()
+    plt.savefig(full_path3_l)
+    plt.clf()
+
     fig, ax = plt.subplots(2,int(5),figsize=(20,10))
     for i in range(int(10)):
         x = output_train[0][i,:,0]
@@ -383,7 +460,81 @@ if dim==2 and n>=50:
     plt.savefig(full_path3_p2)
     plt.clf()
 
+if sve_type == "BR":
+    plt.plot(np.arange(1,len(losses_train)*print_every+1, print_every), losses_train, label='train')
+    plt.plot(np.arange(1,len(losses_test)*print_every+1, print_every), losses_test, label='test')
+    plt.xlabel('Epoch')
+    plt.ylabel('Relative L2 loss')
+    plt.legend()
+    plt.savefig(full_path3_l)
+    plt.clf()
+
+    if T<1: y = T * np.linspace(0,1,int(T/dt+1))
+    else: y = np.linspace(0,int(T),int(T/dt+1))
+    fig, ax = plt.subplots(2,int(5),figsize=(20,10))
+    for i in range(int(10)):
+        if i<=4:
+            ax[0][i].plot(y, output_train[0][i,:,0].cpu(), label="True Volterra path")        # Ich glaube, aus [i,:,0] muss ich [0,:,i] machen
+            ax[0][i].plot(y, output_model_train[0][i,:,0].cpu().detach().numpy(), label="Estimated Volterra path")
+        else:
+            ax[1][i-5].plot(y, output_train[0][i,:,0].cpu(), label="True Volterra path")
+            ax[1][i-5].plot(y, output_model_train[0][i,:,0].cpu().detach().numpy(), label="Estimated Volterra path")
+    plt.suptitle(r'10 paths from the training set: n={}, T={}, dt={}, hidden_channels={}'.format(n,T,dt,hidden_channels))
+    plt.legend()
+    plt.savefig(full_path3_p1)
+    plt.clf()
+
+    fig2, ax2 = plt.subplots(2,int(5),figsize=(20,10))
+    for i in range(int(10)):
+        if i<=4:
+            ax2[0][i].plot(y, output_test[0][i,:,0].cpu(), label="True Volterra path")
+            ax2[0][i].plot(y, output_model_test[0][i,:,0].cpu().detach().numpy(), label="Estimated Volterra path")
+        else:
+            ax2[1][i-5].plot(y, output_test[0][i,:,0].cpu(), label="True Volterra path")
+            ax2[1][i-5].plot(y, output_model_test[0][i,:,0].cpu().detach().numpy(), label="Estimated Volterra path")
+    plt.suptitle(r'10 paths from the testing set: n={}, T={}, dt={}, hidden_channels={}'.format(n,T,dt,hidden_channels))
+    plt.legend()
+    plt.savefig(full_path3_p2)
+    plt.clf()
+
+
+    fig, ax = plt.subplots(1,2,figsize=(20,10))
+    for i in range(int(dim)):
+        ax[0].plot(y, output_train[0][0,:,i].cpu())        
+        ax[0].set_title("True Volterra path")
+        ax[1].plot(y, output_model_train[0][0,:,i].cpu().detach().numpy())
+        ax[1].set_title("Estimated Volterra path")
+
+    plt.savefig(full_path3_p3)
+    plt.clf()
+
+    fig2, ax2 = plt.subplots(1,2,figsize=(20,10))
+    for i in range(int(dim)):
+        ax2[0].plot(y, output_test[0][0,:,i].cpu()) 
+        ax2[0].set_title("True Volterra path")
+        ax2[1].plot(y, output_model_test[0][0,:,i].cpu().detach().numpy())
+        ax2[1].set_title("Estimated Volterra path")
+    plt.savefig(full_path3_p4)
+    plt.clf()
+
 # Last: store the configs
 with open(os.path.join(foldername,'configs.txt'), 'w') as f:
     for p in params:
         f.write("{}: {}\n".format(p,params[p]))
+
+
+with open(os.path.join(foldername, "technical_information.txt"), "w") as f:
+    f.write("Device used: {}\n".format(device))
+    f.write("Number of parameters in the model: {}\n".format(count_params(model)))
+    f.write("Run Time (seconds): {:.2f}\n".format(run_time))  # Save the Run time
+    f.write("Training Time (seconds): {:.2f}\n".format(total_training_time))  # Save the Training time
+    f.write("Was a pre-trained model used? {}\n".format(Model_loaded))  # Indicate if a model was loaded
+    f.write("Peak GPU Memory Usage (MB): {:.2f}\n".format(max(memory_usage["train"]) if is_cuda & CUDA else 0))
+    f.write("Peak CPU Memory Usage (MB): {:.2f}\n".format(max(memory_usage["train"])))
+
+
+with open(os.path.join(foldername, "losses_per_epoch.txt"), "w") as f:
+    f.write("Epoch,TrainLoss,TestLoss\n")
+    for i, (train_loss, test_loss) in enumerate(zip(losses_train, losses_test)):
+        epoch = (i + 1) * print_every
+        f.write(f"{epoch},{train_loss},{test_loss}\n")

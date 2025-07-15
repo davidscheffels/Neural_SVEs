@@ -1,29 +1,30 @@
 # Architectural hyperparameters
-hidden_channels: 12  # dimension of the hidden layers (hence of the hidden Volterra equation to be solved)
-hidden_states_kernels: 24 # choose number of hidden states for the kernels
+hidden_channels: 12  # dimension of the hidden layers (hence of the hidden Volterra equation to be solved) #default: 12
+hidden_states_kernels: 12 # choose number of hidden states for the kernels #default: 12
 
 # Training hyperparameters.
-epochs: 1000  # Number of epochs
-batch_size: 50 # Batch Size
-learning_rate: 0.01  # Learning rate
-scheduler_gamma: 0.8  # After epochs/4 steps, the learning rate is multiplicatively reduced by scheduler_gamma 
+epochs: 5000  # Number of epochs (choose depending on n - the larger n, the less epochs. n=500 -> epochs=500)
+batch_size: 50 # Batch Size #default: 50
+learning_rate: 0.01  # Learning rate #default: 0.01
+scheduler_gamma: 0.8  # After epochs/rel_sched_step steps, the learning rate is multiplicatively reduced by scheduler_gamma 
+rel_sched_step: 4  # After epochs/rel_sched_step steps, the learning rate is reduced by scheduler_gamma
 p: 2            # Use the Lp-loss as the loss function 
 
 # Simulational parameters
-n: 500     # Number of training simulations
+n: 100     # Number of training simulations
 dim: 1     # Dimension of the process
 T: 5       # End time point
-dt: 0.1   # Grid size
+dt: 0.1   # Grid size #default: 0.1
 
 # Evaluation parameters
-print_every: 5   # Print results every print_every steps
+print_every: 1   # Print results every print_every steps
 
 
 # Which Volterra process do you want to learn?
-sve_type: "RH"          # Choose from: PEN, OU, RH, JUMP (JUMP uses mean-reverting parameter thea from RH)
+sve_type: "NPEN"          # Choose from: PEN, NPEN, OU, RH, JUMP (JUMP uses mean-reverting parameter thea from RH), BR (Bank Run)
 # Dependent on which sve_type you choose, choose the following parameters:
-# PEN: 
-epsilon: 1            # Amount of perturbation
+# PEN or NPEN: 
+epsilon: 0.4            # Amount of perturbation
 # OU:
 theta_o: 1              # Process parameters
 mu: 1
@@ -33,6 +34,8 @@ alpha: 0.4              # Process parameters
 kappa: 1
 theta: 2
 xi: 0.5
+#BR:
+vola: 0.05              # Process parameters - The number of banks corresponds to dim
 
 # Expectation of the initial value (it will be N(x0,x0/10)-distributed)
-x0: 5
+x0: 2
